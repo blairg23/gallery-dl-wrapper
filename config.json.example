@@ -1,9 +1,14 @@
 {
   "extractor": {
     "base-directory": "./data",
-    "archive": "./state/archive.sqlite3"
-  },
-  "sites": [
-    "https://example.com"
-  ]
+    "archive": "./state/archive.sqlite3",
+    "twitter": {
+      "cookies": "./state/twitter-cookies.txt",
+      "_gdw": {
+        "sites": [
+          "https://twitter.com/someuser/media"
+        ]
+      }
+    }
+  }
 }

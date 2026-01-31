@@ -518,65 +518,13 @@ def _sites_from_sites_json(sites_doc: dict[str, Any], provider_filter: str | Non
     return out
 
 
-def _sites_from_config_json(cfg: dict[str, Any], provider_filter: str | None) -> list[dict[str, Any]]:
-    ex = cfg.get("extractor", {})
-    if not isinstance(ex, dict):
-        return []
-
-    providers = [provider_filter] if provider_filter else [p for p in ex.keys() if isinstance(p, str)]
-    out: list[dict[str, Any]] = []
-
-    for provider in providers:
-        prov_cfg = ex.get(provider, {})
-        if not isinstance(prov_cfg, dict):
-            continue
-        gdw = prov_cfg.get("_gdw", {})
-        if not isinstance(gdw, dict):
-            continue
-        raw_sites = gdw.get("sites", [])
-        if not isinstance(raw_sites, list):
-            continue
-
-        for site in raw_sites:
-            if not isinstance(site, dict):
-                continue
-            if site.get("disabled") is True:
-                continue
-
-            name = site.get("name")
-            if not isinstance(name, str) or not name.strip():
-                continue
-
-            username = site.get("username")
-            url = site.get("url")
-
-            if isinstance(username, str) and username.strip():
-                url = _build_url("twitter.com", username, "/media")
-
-            if not isinstance(url, str) or not url.strip():
-                continue
-
-            out.append(
-                {
-                    "provider": provider,
-                    "name": name.strip(),
-                    "username": username.strip().lstrip("@") if isinstance(username, str) else None,
-                    "url": url.strip(),
-                }
-            )
-
-    return out
-
-
-def _discover_sites(repo_root: Path, cfg: dict[str, Any], provider_filter: str | None) -> tuple[list[dict[str, Any]], str]:
+def _discover_sites(repo_root: Path, provider_filter: str | None) -> tuple[list[dict[str, Any]], str]:
     sites_path = repo_root / "sites.json"
-    if sites_path.exists():
-        sites_doc = _load_sites_file(sites_path)
-        sites = _sites_from_sites_json(sites_doc, provider_filter)
-        return sites, "sites.json"
-
-    sites = _sites_from_config_json(cfg, provider_filter)
-    return sites, "config.json"
+    if not sites_path.exists():
+        return [], "sites.json"
+    sites_doc = _load_sites_file(sites_path)
+    sites = _sites_from_sites_json(sites_doc, provider_filter)
+    return sites, "sites.json"
 
 
 _URL_RE = re.compile(r"https?://\S+")
@@ -597,7 +545,7 @@ def _truncate(text: str, max_len: int) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="gdw", add_help=True)
-    p.add_argument("url", nargs="?", help="URL to download (optional if config has sites)")
+    p.add_argument("url", nargs="?", help="URL to download (optional if sites.json has sites)")
     p.add_argument("--config", default="config.json", help="Path to config.json (repo-relative)")
     p.add_argument("--provider", help="Run only this provider's sites (e.g. twitter)")
     p.add_argument("--dry-run", action="store_true", help="Print commands without downloading")
@@ -684,7 +632,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = _load_config(config_path)
     base_dir = _resolve_base_directory(cfg, config_path)
 
-    sites, source = _discover_sites(repo_root, cfg, args.provider)
+    sites, source = _discover_sites(repo_root, args.provider)
     if not sites:
         if args.provider:
             print(f"No sites found for provider '{args.provider}' (source: {source})", file=sys.stderr)

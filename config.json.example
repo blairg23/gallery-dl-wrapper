@@ -4,13 +4,7 @@
     "archive": "./state/archive.sqlite3",
 
     "twitter": {
-      "cookies": "./state/twitter-cookies.txt",
-      "_gdw": {
-        "sites": [
-          { "name": "person_x", "url": "https://twitter.com/username/media" },
-          { "name": "person_y", "url": "https://twitter.com/other/media" }
-        ]
-      }
+      "cookies": "./state/twitter-cookies.txt"
     }
   }
 }

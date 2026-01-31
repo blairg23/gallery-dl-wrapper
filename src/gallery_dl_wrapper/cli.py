@@ -86,6 +86,7 @@ def _run_gallery_dl_pipe(
     Note: Colors are typically disabled by gallery-dl in this mode.
     """
     tail: deque[str] = deque(maxlen=60)
+    error_lines: deque[str] = deque(maxlen=20)
 
     proc = subprocess.Popen(
         cmd,
@@ -104,13 +105,19 @@ def _run_gallery_dl_pipe(
         if print_lines:
             sys.stdout.write(line)
             sys.stdout.flush()
-        tail.append(line.rstrip("\n"))
+        stripped = line.rstrip("\n")
+        tail.append(stripped)
+        if _ERROR_RE.search(stripped):
+            error_lines.append(stripped)
 
     rc = proc.wait()
     if rc == 0:
         return 0, ""
 
-    summary = "\n".join([ln for ln in tail if ln.strip()]) or f"gallery-dl exited with code {rc}"
+    if error_lines:
+        summary = "\n".join([ln for ln in error_lines if ln.strip()])
+    else:
+        summary = f"gallery-dl exited with code {rc}"
     return rc, summary[:2000]
 
 
@@ -122,6 +129,7 @@ def _run_gallery_dl_pty(cmd: list[str]) -> tuple[int, str]:
     import pty
 
     tail: deque[str] = deque(maxlen=60)
+    error_lines: deque[str] = deque(maxlen=20)
     master_fd, slave_fd = pty.openpty()
 
     proc = subprocess.Popen(
@@ -148,17 +156,26 @@ def _run_gallery_dl_pty(cmd: list[str]) -> tuple[int, str]:
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
-                tail.append(line.decode(errors="replace"))
+                decoded = line.decode(errors="replace")
+                tail.append(decoded)
+                if _ERROR_RE.search(decoded):
+                    error_lines.append(decoded)
     finally:
         if buf:
-            tail.append(buf.decode(errors="replace"))
+            decoded = buf.decode(errors="replace")
+            tail.append(decoded)
+            if _ERROR_RE.search(decoded):
+                error_lines.append(decoded)
         os.close(master_fd)
 
     rc = proc.wait()
     if rc == 0:
         return 0, ""
 
-    summary = "\n".join([ln for ln in tail if ln.strip()]) or f"gallery-dl exited with code {rc}"
+    if error_lines:
+        summary = "\n".join([ln for ln in error_lines if ln.strip()])
+    else:
+        summary = f"gallery-dl exited with code {rc}"
     return rc, summary[:2000]
 
 
@@ -564,6 +581,10 @@ def _discover_sites(repo_root: Path, cfg: dict[str, Any], provider_filter: str |
 
 _URL_RE = re.compile(r"https?://\S+")
 _STATS_RE = re.compile(r"\b(found|downloaded|skipped)\b[^0-9]*([0-9]+)", re.IGNORECASE)
+_ERROR_RE = re.compile(
+    r"(\[error\]|error:|exception|traceback|http request failed|authorization|authentication|challenge)",
+    re.IGNORECASE,
+)
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -701,7 +722,11 @@ def main(argv: list[str] | None = None) -> None:
             if status_bar is not None:
                 status_bar.set_description_str("", refresh=True)
 
-            dest = (base_dir / name).resolve()
+            dest = base_dir / name / provider
+            username = item.get("username")
+            if isinstance(username, str) and username.strip():
+                dest = dest / username.strip().lstrip("@")
+            dest = dest.resolve()
             cmd = _build_gallery_dl_cmd(url, config_path, dest=dest, passthrough_args=passthrough)
 
             if args.pinned_bar:

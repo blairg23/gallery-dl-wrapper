@@ -1,0 +1,9 @@
+{
+  "extractor": {
+    "base-directory": "./data",
+    "archive": "./state/archive.sqlite3"
+  },
+  "sites": [
+    "https://example.com"
+  ]
+}

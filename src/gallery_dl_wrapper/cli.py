@@ -58,6 +58,20 @@ def _args_has_flag(argv: list[str], *flags: str) -> bool:
     return any(a in flags for a in argv)
 
 
+def _passthrough_sets_base_directory(argv: list[str]) -> bool:
+    for idx, arg in enumerate(argv):
+        if arg in ("-o", "--option"):
+            if idx + 1 < len(argv):
+                opt = argv[idx + 1]
+                if opt.startswith("base-directory=") or opt.startswith("extractor.base-directory="):
+                    return True
+        elif arg.startswith("-o") and "=" in arg:
+            key = arg[2:]
+            if key.startswith("base-directory=") or key.startswith("extractor.base-directory="):
+                return True
+    return False
+
+
 def _build_gallery_dl_cmd(
     url: str,
     config_path: Path,
@@ -66,9 +80,13 @@ def _build_gallery_dl_cmd(
 ) -> list[str]:
     cmd = ["gallery-dl", "--ignore-config", "--config", str(config_path)]
 
-    # Inject dest only if we want it AND caller didn't pass their own -d/--dest
-    if dest is not None and not _args_has_flag(passthrough_args, "--dest", "-d"):
-        cmd += ["--dest", str(dest)]
+    # Inject per-site base-directory only if caller didn't pass their own override
+    if (
+        dest is not None
+        and not _args_has_flag(passthrough_args, "--destination", "-d", "--dest")
+        and not _passthrough_sets_base_directory(passthrough_args)
+    ):
+        cmd += ["-o", f"extractor.base-directory={dest}"]
 
     cmd += passthrough_args
     cmd.append(url)
@@ -281,6 +299,13 @@ def _build_url(host: str, username: str, path_suffix: str) -> str:
 
 def _normalize_username(username: str) -> str:
     return (username or "").strip().lstrip("@")
+
+
+def _normalize_url_for_match(url: str) -> str:
+    u = (url or "").strip()
+    while u.endswith("/"):
+        u = u[:-1]
+    return u
 
 
 def _load_sites_file(sites_path: Path) -> dict[str, Any]:
@@ -623,7 +648,25 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0)
 
     if args.url:
-        cmd = _build_gallery_dl_cmd(args.url, config_path, dest=None, passthrough_args=passthrough)
+        cfg = _load_config(config_path)
+        base_dir = _resolve_base_directory(cfg, config_path)
+        dest: Path | None = None
+        if not _args_has_flag(passthrough, "--destination", "-d", "--dest") and not _passthrough_sets_base_directory(passthrough):
+            sites, _source = _discover_sites(repo_root, None)
+            target = _normalize_url_for_match(args.url)
+            for site in sites:
+                if _normalize_url_for_match(site.get("url", "")) == target:
+                    dest = (base_dir / site["name"]).resolve()
+                    break
+            if dest is None:
+                if "twitter.com/" in target:
+                    try:
+                        username = target.split("twitter.com/", 1)[1].split("/", 1)[0]
+                        if username:
+                            dest = (base_dir / username).resolve()
+                    except Exception:
+                        pass
+        cmd = _build_gallery_dl_cmd(args.url, config_path, dest=dest, passthrough_args=passthrough)
         rc, msg = _run_gallery_dl(cmd, args.dry_run)
         if rc != 0 and msg:
             print(msg, file=sys.stderr)
@@ -670,11 +713,9 @@ def main(argv: list[str] | None = None) -> None:
             if status_bar is not None:
                 status_bar.set_description_str("", refresh=True)
 
-            dest = base_dir / name / provider
-            username = item.get("username")
-            if isinstance(username, str) and username.strip():
-                dest = dest / username.strip().lstrip("@")
-            dest = dest.resolve()
+            # gallery-dl already appends provider/username via its directory format,
+            # so we only set a per-site base here to avoid double nesting.
+            dest = (base_dir / name).resolve()
             cmd = _build_gallery_dl_cmd(url, config_path, dest=dest, passthrough_args=passthrough)
 
             if args.pinned_bar:

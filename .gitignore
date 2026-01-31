@@ -1,5 +1,10 @@
 # secrets / personal config
 config.json
+sites.json
+
+# backups
+backups/
+*.bak
 
 # downloads/state
 data/

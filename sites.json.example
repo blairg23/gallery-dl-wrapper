@@ -1,0 +1,10 @@
+{
+  "twitter": {
+    "host": "twitter.com",
+    "path_suffix": "media",
+    "sites": [
+      { "name": "example_person_a", "username": "handle_a" },
+      { "name": "example_person_b", "username": "handle_b", "disabled": true }
+    ]
+  }
+}

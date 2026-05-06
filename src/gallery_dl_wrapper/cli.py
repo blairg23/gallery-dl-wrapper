@@ -326,6 +326,8 @@ def _username_from_social_url(url: str) -> str | None:
     host = parsed.netloc.lower()
     if host.startswith("www."):
         host = host[4:]
+    if host.startswith("mobile."):
+        host = host[7:]
 
     if host not in {"twitter.com", "x.com", "instagram.com"}:
         return None

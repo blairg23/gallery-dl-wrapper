@@ -6,8 +6,13 @@ sites.json
 backups/
 *.bak
 
+# local planning artifacts
+.future_tickets/
+artifacts/
+
 # downloads/state
 data/
+downloads/
 state/
 .venv/
 __pycache__/

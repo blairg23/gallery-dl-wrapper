@@ -3,7 +3,7 @@
 A tiny Python CLI wrapper around `gallery-dl` that:
 
 - Uses a **repo-local** `config.json` (and ignores any global `~/.config/gallery-dl/config.json`)
-- Lets you group target URLs by provider (ex: `twitter`, `pixiv`) inside the config
+- Lets you group target URLs by provider (ex: `twitter`, `instagram`) inside `sites.json`
 - Supports a `--dry-run` mode to print commands without downloading
 - Keeps downloads + state **repo-local** (no cross-drive references)
 
@@ -26,10 +26,10 @@ Create a local config and keep secrets out of git:
 cp config.json.example config.json
 ```
 
-Suggested structure:
+Suggested `config.json` structure:
 
 - gallery-dl options live under `extractor`
-- wrapper-managed URL lists live under `extractor.<provider>._gdw.sites`
+- wrapper-managed URL lists live in `sites.json`
 
 ```json
 {
@@ -38,24 +38,35 @@ Suggested structure:
     "archive": "./state/archive.sqlite3",
 
     "twitter": {
-      "cookies": "./state/twitter-cookies.txt",
-      "_gdw": {
-        "sites": [
-          "https://twitter.com/someuser/media",
-          "https://twitter.com/anotheruser/media"
-        ]
-      }
+      "cookies": "./state/twitter-cookies.txt"
     },
 
-    "pixiv": {
-      "cookies": "./state/pixiv-cookies.txt",
-      "_gdw": {
-        "sites": [
-          "https://www.pixiv.net/users/12345",
-          "https://www.pixiv.net/users/67890"
-        ]
-      }
+    "instagram": {
+      "cookies": "./state/instagram-cookies.txt"
     }
+  }
+}
+```
+
+Suggested `sites.json` structure:
+
+```json
+{
+  "twitter": {
+    "host": "x.com",
+    "path_suffix": "media",
+    "sites": [
+      { "name": "someuser", "username": "someuser" },
+      { "name": "anotheruser", "username": "anotheruser" }
+    ]
+  },
+  "instagram": {
+    "host": "www.instagram.com",
+    "path_suffix": "posts/",
+    "sites": [
+      { "name": "someuser", "username": "someuser" },
+      { "name": "anotheruser", "username": "anotheruser" }
+    ]
   }
 }
 ```
@@ -101,14 +112,14 @@ poetry run gdw
 
 ```bash
 poetry run gdw --provider twitter
-poetry run gdw --provider pixiv
+poetry run gdw --provider instagram
 ```
 
 ### 5) Run a single URL (bypasses provider lists)
 
 ```bash
-poetry run gdw "https://twitter.com/someuser/media"
-poetry run gdw "https://www.pixiv.net/users/12345"
+poetry run gdw "https://x.com/someuser/media"
+poetry run gdw "https://www.instagram.com/someuser/posts/"
 ```
 
 ### 6) One-off URL with an alternate config file
@@ -132,5 +143,5 @@ poetry run gdw --provider twitter
 The wrapper always uses `--ignore-config`, but you can verify manually:
 
 ```bash
-poetry run gallery-dl --ignore-config --config ./config.json -K "https://twitter.com/someuser/media"
+poetry run gallery-dl --ignore-config --config ./config.json -K "https://x.com/someuser/media"
 ```

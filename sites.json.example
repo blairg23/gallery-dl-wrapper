@@ -1,7 +1,15 @@
 {
   "twitter": {
-    "host": "twitter.com",
+    "host": "x.com",
     "path_suffix": "media",
+    "sites": [
+      { "name": "example_person_a", "username": "handle_a" },
+      { "name": "example_person_b", "username": "handle_b", "disabled": true }
+    ]
+  },
+  "instagram": {
+    "host": "www.instagram.com",
+    "path_suffix": "posts/",
     "sites": [
       { "name": "example_person_a", "username": "handle_a" },
       { "name": "example_person_b", "username": "handle_b", "disabled": true }

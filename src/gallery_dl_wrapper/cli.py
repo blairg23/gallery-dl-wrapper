@@ -9,6 +9,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from tqdm import tqdm
 
@@ -225,7 +226,9 @@ def _run_gallery_dl(
 
     return _run_gallery_dl_pipe(cmd, on_line=on_line, print_lines=print_lines)
 
-def _errors_key(provider: str, name: str) -> str:
+def _errors_key(provider: str, name: str, username: str | None = None) -> str:
+    if username:
+        return f"{provider}:{name}:{username}"
     return f"{provider}:{name}"
 
 
@@ -251,7 +254,9 @@ def _upsert_error(
     code: int,
     message: str,
 ) -> None:
-    key = _errors_key(provider, site["name"])
+    username = site.get("username")
+    clean_username = username.lstrip("@") if isinstance(username, str) else None
+    key = _errors_key(provider, site["name"], clean_username)
     entry: dict[str, Any] = {
         "provider": provider,
         "name": site["name"],
@@ -260,20 +265,28 @@ def _upsert_error(
         "message": message,
         "last_error_at": _utc_now_iso(),
     }
-    if "username" in site and isinstance(site["username"], str):
-        entry["username"] = site["username"].lstrip("@")
+    if clean_username:
+        entry["username"] = clean_username
 
     errors_doc["errors"][key] = entry
     errors_doc["generated_at"] = _utc_now_iso()
 
 
-def _clear_error(errors_doc: dict[str, Any], provider: str, name: str) -> bool:
-    key = _errors_key(provider, name)
-    if key in errors_doc.get("errors", {}):
-        del errors_doc["errors"][key]
+def _clear_error(errors_doc: dict[str, Any], provider: str, name: str, username: str | None = None) -> bool:
+    errors = errors_doc.get("errors", {})
+    clean_username = username.lstrip("@") if isinstance(username, str) else None
+    keys = [_errors_key(provider, name, clean_username)] if clean_username else []
+    keys.append(_errors_key(provider, name))
+
+    cleared = False
+    for key in keys:
+        if key in errors:
+            del errors[key]
+            cleared = True
+
+    if cleared:
         errors_doc["generated_at"] = _utc_now_iso()
-        return True
-    return False
+    return cleared
 
 
 def _normalize_path_suffix(suffix: str) -> str:
@@ -306,6 +319,27 @@ def _normalize_url_for_match(url: str) -> str:
     while u.endswith("/"):
         u = u[:-1]
     return u
+
+
+def _username_from_social_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    if host not in {"twitter.com", "x.com", "instagram.com"}:
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return None
+
+    if host == "instagram.com" and parts[0] in {"p", "reel", "reels", "stories", "explore"}:
+        return None
+    if host in {"twitter.com", "x.com"} and parts[0] in {"i", "home", "hashtag", "search", "notifications"}:
+        return None
+
+    return parts[0]
 
 
 def _load_sites_file(sites_path: Path) -> dict[str, Any]:
@@ -659,13 +693,9 @@ def main(argv: list[str] | None = None) -> None:
                     dest = (base_dir / site["name"]).resolve()
                     break
             if dest is None:
-                if "twitter.com/" in target:
-                    try:
-                        username = target.split("twitter.com/", 1)[1].split("/", 1)[0]
-                        if username:
-                            dest = (base_dir / username).resolve()
-                    except Exception:
-                        pass
+                username = _username_from_social_url(target)
+                if username:
+                    dest = (base_dir / username).resolve()
         cmd = _build_gallery_dl_cmd(args.url, config_path, dest=dest, passthrough_args=passthrough)
         rc, msg = _run_gallery_dl(cmd, args.dry_run)
         if rc != 0 and msg:
@@ -798,13 +828,24 @@ def main(argv: list[str] | None = None) -> None:
                     errors_doc = _load_errors(errors_path)
                 _upsert_error(errors_doc, provider, item, url, rc, msg or f"gallery-dl exited with code {rc}")
                 errors_dirty = True
+                if not args.dry_run:
+                    _write_json(errors_path, errors_doc)
                 bar.write(f"ERROR {provider}/{name} - see {Path(args.errors_file)}")
             else:
                 if errors_path.exists():
                     if errors_doc is None:
                         errors_doc = _load_errors(errors_path)
-                    if _clear_error(errors_doc, provider, name):
+                    username = item.get("username")
+                    if _clear_error(errors_doc, provider, name, username if isinstance(username, str) else None):
                         errors_dirty = True
+                        if not args.dry_run:
+                            if errors_doc.get("errors"):
+                                _write_json(errors_path, errors_doc)
+                            else:
+                                try:
+                                    errors_path.unlink()
+                                except FileNotFoundError:
+                                    pass
     finally:
         bar.close()
         if status_bar is not None:

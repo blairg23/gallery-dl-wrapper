@@ -335,12 +335,12 @@ def _parse_import_line(line: str) -> tuple[str, str] | None:
         raw = raw.split("://", 1)[1]
     # Split host from path
     parts = raw.lstrip("/").split("/", 1)
-    domain = parts[0].lower()
+    domain = parts[0].lower().removeprefix("www.")
     path = parts[1] if len(parts) > 1 else ""
     provider = _DOMAIN_TO_PROVIDER.get(domain)
     if not provider:
         return None
-    username = path.split("/")[0].strip().lstrip("@")
+    username = path.split("/")[0].split("?")[0].split("#")[0].strip().lstrip("@")
     if not username:
         return None
     return provider, username

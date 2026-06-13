@@ -314,6 +314,53 @@ def _normalize_username(username: str) -> str:
     return (username or "").strip().lstrip("@")
 
 
+_DOMAIN_TO_PROVIDER: dict[str, str] = {
+    "x.com": "twitter",
+    "twitter.com": "twitter",
+    "instagram.com": "instagram",
+}
+
+
+def _parse_import_line(line: str) -> tuple[str, str] | None:
+    """Parse one line from an import file into (provider, username).
+
+    Accepts bare domains or full URLs: instagram.com/user, https://x.com/user/media
+    Returns None if the line is blank, a comment, or has an unrecognised domain.
+    """
+    raw = line.strip()
+    if not raw or raw.startswith("#"):
+        return None
+    # Strip scheme
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    # Split host from path
+    parts = raw.lstrip("/").split("/", 1)
+    domain = parts[0].lower()
+    path = parts[1] if len(parts) > 1 else ""
+    provider = _DOMAIN_TO_PROVIDER.get(domain)
+    if not provider:
+        return None
+    username = path.split("/")[0].strip().lstrip("@")
+    if not username:
+        return None
+    return provider, username
+
+
+def _sync_sites_json(sites_path: Path, gdw_cfg: dict[str, object]) -> None:
+    """Copy sites.json to every path listed in config gdw.sync_targets."""
+    targets = gdw_cfg.get("sync_targets", [])
+    if not isinstance(targets, list):
+        return
+    for raw in targets:
+        dest = Path(str(raw))
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sites_path, dest)
+            print(f"synced sites.json -> {dest}", file=sys.stdout)
+        except Exception as exc:
+            print(f"sync failed for {dest}: {exc}", file=sys.stderr)
+
+
 def _normalize_url_for_match(url: str) -> str:
     u = (url or "").strip()
     while u.endswith("/"):
@@ -625,6 +672,17 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--host", help="Host for a new provider block (used with --add)")
     p.add_argument("--path-suffix", help="Path suffix for a new provider block (used with --add)")
     p.add_argument(
+        "--import",
+        dest="import_file",
+        metavar="FILE",
+        help="Import URLs from a file (one per line) into sites.json, then delete the file",
+    )
+    p.add_argument(
+        "--sync",
+        action="store_true",
+        help="Copy sites.json to all paths in config gdw.sync_targets and exit",
+    )
+    p.add_argument(
         "--pinned-bar",
         action="store_true",
         help="Keep tqdm bar pinned by routing gallery-dl output through the bar",
@@ -658,6 +716,37 @@ def main(argv: list[str] | None = None) -> None:
 
     repo_root = config_path.parent
     errors_path = (repo_root / Path(args.errors_file)).resolve()
+    cfg = _load_config(config_path)
+    gdw_cfg = cfg.get("gdw", {}) if isinstance(cfg, dict) else {}
+    sites_path = repo_root / "sites.json"
+
+    if args.sync:
+        _sync_sites_json(sites_path, gdw_cfg)
+        raise SystemExit(0)
+
+    if args.import_file:
+        import_path = Path(args.import_file).resolve()
+        if not import_path.exists():
+            print(f"Import file not found: {import_path}", file=sys.stderr)
+            raise SystemExit(2)
+        lines = import_path.read_text(encoding="utf-8").splitlines()
+        added = 0
+        skipped = 0
+        for line in lines:
+            parsed = _parse_import_line(line)
+            if parsed is None:
+                if line.strip() and not line.strip().startswith("#"):
+                    print(f"skipped (unrecognised domain): {line.strip()}", file=sys.stderr)
+                    skipped += 1
+                continue
+            provider, username = parsed
+            _add_site(repo_root, provider=provider, name=username, username=username,
+                      host=None, path_suffix=None)
+            added += 1
+        import_path.unlink()
+        print(f"import done: {added} added, {skipped} skipped -- {import_path.name} deleted")
+        _sync_sites_json(sites_path, gdw_cfg)
+        raise SystemExit(0)
 
     if args.add:
         if args.remove:
@@ -672,6 +761,7 @@ def main(argv: list[str] | None = None) -> None:
             host=args.host,
             path_suffix=args.path_suffix,
         )
+        _sync_sites_json(sites_path, gdw_cfg)
         raise SystemExit(0)
     if args.remove:
         if len(args.remove) not in (2, 3):
@@ -681,10 +771,10 @@ def main(argv: list[str] | None = None) -> None:
         name = args.remove[1]
         username = args.remove[2] if len(args.remove) == 3 else None
         _remove_site(repo_root, provider=provider, name=name, username=username)
+        _sync_sites_json(sites_path, gdw_cfg)
         raise SystemExit(0)
 
     if args.url:
-        cfg = _load_config(config_path)
         base_dir = _resolve_base_directory(cfg, config_path)
         dest: Path | None = None
         if not _args_has_flag(passthrough, "--destination", "-d", "--dest") and not _passthrough_sets_base_directory(passthrough):
@@ -704,7 +794,6 @@ def main(argv: list[str] | None = None) -> None:
             print(msg, file=sys.stderr)
         raise SystemExit(rc)
 
-    cfg = _load_config(config_path)
     base_dir = _resolve_base_directory(cfg, config_path)
 
     sites, source = _discover_sites(repo_root, args.provider)

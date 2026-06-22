@@ -91,12 +91,15 @@ def sync_site_files(
     dest_dir: Path,
     source_url: str = "",
 ) -> None:
-    """Scan dest_dir after a successful run; upsert file records and mark missing files."""
+    """Scan the provider subtree of dest_dir after a successful run; upsert file records and mark missing files."""
     now = _utc_now_iso()
     present: set[str] = set()
+    # Scope to the provider subdirectory so two providers sharing the same
+    # site name (and therefore the same dest_dir) don't see each other's files.
+    scan_root = dest_dir / provider
 
-    if dest_dir.exists():
-        for fpath in dest_dir.rglob("*"):
+    if scan_root.exists():
+        for fpath in scan_root.rglob("*"):
             if not fpath.is_file():
                 continue
             path_str = str(fpath)
@@ -162,12 +165,19 @@ def audit_site(
     for row in rows:
         manifest_paths.add(row["path"])
         if row["missing_at"] is not None:
+            # Already marked missing by a previous sync
+            missing.append(row["path"])
+        elif not Path(row["path"]).exists():
+            # Deleted since the last sync -- treat as missing now
             missing.append(row["path"])
 
+    # Scope the filesystem scan to the provider subtree to avoid attributing
+    # another provider's files (sharing the same site name) as orphans.
+    scan_root = dest_dir / provider
     orphans: list[str] = []
-    dest_exists = dest_dir.exists()
+    dest_exists = scan_root.exists()
     if dest_exists:
-        for fpath in dest_dir.rglob("*"):
+        for fpath in scan_root.rglob("*"):
             if fpath.is_file() and str(fpath) not in manifest_paths:
                 orphans.append(str(fpath))
 
@@ -175,7 +185,7 @@ def audit_site(
         "provider": provider,
         "site_name": site_name,
         "username": username,
-        "dest": str(dest_dir),
+        "dest": str(scan_root),
         "dest_exists": dest_exists,
         "manifest_files": len(manifest_paths),
         "present_files": len(manifest_paths) - len(missing),

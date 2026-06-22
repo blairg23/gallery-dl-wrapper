@@ -651,7 +651,101 @@ def _truncate(text: str, max_len: int) -> str:
     return text[: max_len - 3] + "..."
 
 
+def _cmd_audit(argv: list[str]) -> None:
+    from gallery_dl_wrapper import state as _state
+
+    p = argparse.ArgumentParser(prog="gdw audit")
+    p.add_argument("--config", default="config.json", help="Path to config.json (repo-relative)")
+    p.add_argument("--provider", help="Limit audit to one provider")
+    p.add_argument("--site", help="Limit audit to one site name")
+    p.add_argument("--strict", action="store_true", help="Exit non-zero if missing or orphan files are found")
+    p.add_argument("--json", dest="json_path", metavar="PATH", help="Write JSON report to PATH (repo-relative)")
+    args = p.parse_args(argv)
+
+    config_path = Path(args.config).resolve()
+    if not config_path.exists():
+        print(f"Config not found: {config_path}", file=sys.stderr)
+        raise SystemExit(2)
+
+    repo_root = config_path.parent
+    cfg = _load_config(config_path)
+    base_dir = _resolve_base_directory(cfg, config_path)
+    state_dir = repo_root / "state"
+
+    sites, source = _discover_sites(repo_root, args.provider)
+    if args.site:
+        sites = [s for s in sites if s["name"] == args.site]
+
+    if not sites:
+        label = args.site or args.provider or "any"
+        print(f"No enabled sites found for '{label}' (source: {source})", file=sys.stderr)
+        raise SystemExit(2)
+
+    conn = _state.open_db(state_dir)
+    try:
+        print(f"gdw audit -- checking {len(sites)} site(s)\n")
+        site_results: list[dict[str, Any]] = []
+        total_missing = 0
+        total_orphans = 0
+
+        for item in sites:
+            provider = item["provider"]
+            name = item["name"]
+            username = item.get("username")
+            dest = (base_dir / name).resolve()
+
+            result = _state.audit_site(conn, provider, name, username, dest)
+            site_results.append(result)
+            total_missing += result["missing_files"]
+            total_orphans += result["orphan_files"]
+
+            tag = f"[{provider}/{name}]"
+            if not result["dest_exists"] and result["manifest_files"] == 0:
+                print(f"{tag} no data -- dest not found: {dest}")
+            elif not result["dest_exists"]:
+                print(f"{tag} WARNING -- dest not found: {dest} ({result['manifest_files']} in manifest)")
+            elif result["missing_files"] == 0 and result["orphan_files"] == 0:
+                print(f"{tag} OK -- {result['present_files']} files")
+            else:
+                parts = []
+                if result["missing_files"]:
+                    parts.append(f"{result['missing_files']} missing")
+                if result["orphan_files"]:
+                    parts.append(f"{result['orphan_files']} orphans")
+                print(f"{tag} WARNING -- {', '.join(parts)}")
+                for p in result["missing"]:
+                    print(f"  MISSING  {p}")
+                for p in result["orphans"]:
+                    print(f"  ORPHAN   {p}")
+    finally:
+        conn.close()
+
+    print(f"\nSummary: {len(sites)} site(s), {total_missing} missing, {total_orphans} orphans")
+
+    if args.json_path:
+        report_path = (repo_root / Path(args.json_path)).resolve()
+        report = {
+            "generated_at": _utc_now_iso(),
+            "sites": site_results,
+            "summary": {
+                "sites_checked": len(sites),
+                "total_missing": total_missing,
+                "total_orphans": total_orphans,
+            },
+        }
+        _write_json(report_path, report)
+        print(f"JSON report written to {report_path}")
+
+    if args.strict and (total_missing > 0 or total_orphans > 0):
+        raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
+    effective_argv = list(argv if argv is not None else sys.argv[1:])
+    if effective_argv and effective_argv[0] == "audit":
+        _cmd_audit(effective_argv[1:])
+        return
+
     p = argparse.ArgumentParser(prog="gdw", add_help=True)
     p.add_argument("url", nargs="?", help="URL to download (optional if sites.json has sites)")
     p.add_argument("--config", default="config.json", help="Path to config.json (repo-relative)")
@@ -705,7 +799,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.set_defaults(url_postfix=True)
 
-    args, passthrough = p.parse_known_args(argv)
+    args, passthrough = p.parse_known_args(effective_argv)
     if passthrough and passthrough[0] == "--":
         passthrough = passthrough[1:]
 
@@ -804,8 +898,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"No sites found (source: {source})", file=sys.stderr)
         raise SystemExit(2)
 
+    from gallery_dl_wrapper import state as _state
+
     errors_doc: dict[str, Any] | None = None
     errors_dirty = False
+    db = _state.open_db(repo_root / "state")
 
     rc_any = 0
     if args.status_above_bar and not args.pinned_bar:
@@ -826,6 +923,7 @@ def main(argv: list[str] | None = None) -> None:
             provider = item["provider"]
             name = item["name"]
             url = item["url"]
+            username = item.get("username")
             label = f"{provider}/{name}"
 
             bar.set_postfix_str(label, refresh=True)
@@ -838,6 +936,9 @@ def main(argv: list[str] | None = None) -> None:
             # so we only set a per-site base here to avoid double nesting.
             dest = (base_dir / name).resolve()
             cmd = _build_gallery_dl_cmd(url, config_path, dest=dest, passthrough_args=passthrough)
+            run_id: int | None = None
+            if not args.dry_run:
+                run_id = _state.create_run(db, provider, name, username, url)
 
             if args.pinned_bar:
                 found = 0
@@ -897,6 +998,8 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 rc, msg = _run_gallery_dl(cmd, args.dry_run)
             rc_any = rc_any or rc
+            if run_id is not None:
+                _state.finish_run(db, run_id, rc, msg or None)
 
             if args.pinned_bar:
                 stat_parts: list[str] = []
@@ -923,10 +1026,11 @@ def main(argv: list[str] | None = None) -> None:
                     _write_json(errors_path, errors_doc)
                 bar.write(f"ERROR {provider}/{name} - see {Path(args.errors_file)}")
             else:
+                if run_id is not None:
+                    _state.sync_site_files(db, run_id, provider, name, username, dest, url)
                 if errors_path.exists():
                     if errors_doc is None:
                         errors_doc = _load_errors(errors_path)
-                    username = item.get("username")
                     if _clear_error(errors_doc, provider, name, username if isinstance(username, str) else None):
                         errors_dirty = True
                         if not args.dry_run:
@@ -941,6 +1045,7 @@ def main(argv: list[str] | None = None) -> None:
         bar.close()
         if status_bar is not None:
             status_bar.close()
+        db.close()
 
     if errors_dirty and errors_doc is not None and not args.dry_run:
         if errors_doc.get("errors"):

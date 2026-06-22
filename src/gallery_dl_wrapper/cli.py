@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -319,6 +320,51 @@ _DOMAIN_TO_PROVIDER: dict[str, str] = {
     "twitter.com": "twitter",
     "instagram.com": "instagram",
 }
+
+# Gallery-dl --print format string that yields the display name for a profile.
+_PROVIDER_NAME_FIELD: dict[str, str] = {
+    "instagram": "{user[full_name]}",
+    "twitter": "{user[name]}",
+}
+
+# Canonical profile URL template used when resolving display names.
+_PROVIDER_CANONICAL_URL: dict[str, str] = {
+    "instagram": "https://www.instagram.com/{username}/",
+    "twitter": "https://x.com/{username}/",
+}
+
+
+def _slugify(text: str) -> str:
+    """Lowercase + ASCII-normalize a display name into a folder-safe slug."""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", errors="ignore").decode("ascii")
+    text = text.lower()
+    text = re.sub(r"[^\w]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def _resolve_display_name(provider: str, username: str, config_path: Path) -> str | None:
+    """Run gallery-dl --print to fetch the display name without downloading any files."""
+    fmt = _PROVIDER_NAME_FIELD.get(provider)
+    url_tpl = _PROVIDER_CANONICAL_URL.get(provider)
+    if not fmt or not url_tpl:
+        return None
+    url = url_tpl.format(username=username)
+    cmd = [
+        "gallery-dl",
+        "--ignore-config",
+        "--config", str(config_path),
+        "--print", fmt,
+        "--range", "1-1",
+        url,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        name = result.stdout.strip().splitlines()[0].strip() if result.stdout.strip() else ""
+        if name and name not in ("None", fmt):
+            return name
+    except Exception:
+        pass
+    return None
 
 
 def _parse_import_line(line: str) -> tuple[str, str] | None:
@@ -834,7 +880,11 @@ def main(argv: list[str] | None = None) -> None:
                     skipped += 1
                 continue
             provider, username = parsed
-            _add_site(repo_root, provider=provider, name=username, username=username,
+            display = _resolve_display_name(provider, username, config_path)
+            name = _slugify(display) if display else username
+            if display:
+                print(f"  {username} -> {name}  ({display})")
+            _add_site(repo_root, provider=provider, name=name, username=username,
                       host=None, path_suffix=None)
             added += 1
         import_path.unlink()

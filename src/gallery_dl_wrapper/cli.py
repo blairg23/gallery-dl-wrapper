@@ -324,7 +324,7 @@ _DOMAIN_TO_PROVIDER: dict[str, str] = {
 # Gallery-dl --print format string that yields the display name for a profile.
 _PROVIDER_NAME_FIELD: dict[str, str] = {
     "instagram": "{user[full_name]}",
-    "twitter": "{user[name]}",
+    "twitter": "{user[nick]}",
 }
 
 # Canonical profile URL template used when resolving display names.
@@ -889,7 +889,14 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             provider, username = parsed
             display = _resolve_display_name(provider, username, config_path)
-            name = _slugify(display) if display else username
+            slug = _slugify(display) if display else ""
+            name = slug if slug else username
+            # De-duplicate: if another username already owns this slug, append ours.
+            if slug and slug != username:
+                sites_doc = _load_sites_file(repo_root / "sites.json") if (repo_root / "sites.json").exists() else {}
+                existing = [s for s in sites_doc.get(provider, {}).get("sites", []) if s.get("name") == slug and s.get("username") != username]
+                if existing:
+                    name = f"{slug}_{username}"
             if display:
                 print(f"  {username} -> {name}  ({display})")
             _add_site(repo_root, provider=provider, name=name, username=username,

@@ -358,7 +358,15 @@ def _resolve_display_name(provider: str, username: str, config_path: Path) -> st
         url,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(config_path.parent),
+        )
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"  [warn] gallery-dl: {result.stderr.strip().splitlines()[-1]}", flush=True)
         name = result.stdout.strip().splitlines()[0].strip() if result.stdout.strip() else ""
         if name and name not in ("None", fmt):
             return name

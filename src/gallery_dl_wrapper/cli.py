@@ -400,19 +400,30 @@ def _parse_import_line(line: str) -> tuple[str, str] | None:
     return provider, username
 
 
-def _sync_sites_json(sites_path: Path, gdw_cfg: dict[str, object]) -> None:
-    """Copy sites.json to every path listed in config gdw.sync_targets."""
+def _sync_gdw_files(sites_path: Path, config_path: Path, gdw_cfg: dict[str, object]) -> None:
+    """Copy sites.json and config.json into every directory listed in config gdw.sync_targets."""
     targets = gdw_cfg.get("sync_targets", [])
     if not isinstance(targets, list):
         return
     for raw in targets:
-        dest = Path(str(raw))
+        dest_dir = Path(str(raw))
         try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(sites_path, dest)
-            print(f"synced sites.json -> {dest}", file=sys.stdout)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            synced = []
+            for src, dest_name in ((sites_path, "sites.json"), (config_path, "config.json")):
+                if src.exists():
+                    shutil.copy2(src, dest_dir / dest_name)
+                    synced.append(dest_name)
+            print(f"synced {', '.join(synced)} -> {dest_dir}", file=sys.stdout)
+        except PermissionError as exc:
+            print(
+                f"sync failed for {dest_dir}: {exc}\n"
+                f"  A file at the target may be owned by a different user (common on WSL drives "
+                f"mounted without an explicit uid/gid mapping). Try: sudo chmod 664 {dest_dir}/*.json",
+                file=sys.stderr,
+            )
         except Exception as exc:
-            print(f"sync failed for {dest}: {exc}", file=sys.stderr)
+            print(f"sync failed for {dest_dir}: {exc}", file=sys.stderr)
 
 
 def _normalize_url_for_match(url: str) -> str:
@@ -828,7 +839,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--sync",
         action="store_true",
-        help="Copy sites.json to all paths in config gdw.sync_targets and exit",
+        help="Copy sites.json and config.json to all directories in config gdw.sync_targets and exit",
     )
     p.add_argument(
         "--pinned-bar",
@@ -869,7 +880,7 @@ def main(argv: list[str] | None = None) -> None:
     sites_path = repo_root / "sites.json"
 
     if args.sync:
-        _sync_sites_json(sites_path, gdw_cfg)
+        _sync_gdw_files(sites_path, config_path, gdw_cfg)
         raise SystemExit(0)
 
     if args.import_file:
@@ -904,7 +915,7 @@ def main(argv: list[str] | None = None) -> None:
             added += 1
         import_path.unlink()
         print(f"import done: {added} added, {skipped} skipped -- {import_path.name} deleted")
-        _sync_sites_json(sites_path, gdw_cfg)
+        _sync_gdw_files(sites_path, config_path, gdw_cfg)
         raise SystemExit(0)
 
     if args.add:
@@ -920,7 +931,7 @@ def main(argv: list[str] | None = None) -> None:
             host=args.host,
             path_suffix=args.path_suffix,
         )
-        _sync_sites_json(sites_path, gdw_cfg)
+        _sync_gdw_files(sites_path, config_path, gdw_cfg)
         raise SystemExit(0)
     if args.remove:
         if len(args.remove) not in (2, 3):
@@ -930,7 +941,7 @@ def main(argv: list[str] | None = None) -> None:
         name = args.remove[1]
         username = args.remove[2] if len(args.remove) == 3 else None
         _remove_site(repo_root, provider=provider, name=name, username=username)
-        _sync_sites_json(sites_path, gdw_cfg)
+        _sync_gdw_files(sites_path, config_path, gdw_cfg)
         raise SystemExit(0)
 
     if args.url:

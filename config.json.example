@@ -9,7 +9,7 @@
   },
   "gdw": {
     "sync_targets": [
-      "/path/to/other/location/sites.json"
+      "/path/to/other/location"
     ]
   }
 }

@@ -891,14 +891,17 @@ def main(argv: list[str] | None = None) -> None:
         lines = import_path.read_text(encoding="utf-8").splitlines()
         added = 0
         skipped = 0
+        bar = tqdm(total=len(lines), desc="importing", unit="line", dynamic_ncols=True)
         for line in lines:
             parsed = _parse_import_line(line)
             if parsed is None:
                 if line.strip() and not line.strip().startswith("#"):
-                    print(f"skipped (unrecognised domain): {line.strip()}", file=sys.stderr)
+                    bar.write(f"skipped (unrecognised domain): {line.strip()}", file=sys.stderr)
                     skipped += 1
+                bar.update(1)
                 continue
             provider, username = parsed
+            bar.set_postfix_str(f"connecting to {provider} (@{username})", refresh=True)
             display = _resolve_display_name(provider, username, config_path)
             slug = _slugify(display) if display else ""
             name = slug if slug else username
@@ -909,10 +912,12 @@ def main(argv: list[str] | None = None) -> None:
                 if existing:
                     name = f"{slug}_{username}"
             if display:
-                print(f"  {username} -> {name}  ({display})")
+                bar.write(f"  {username} -> {name}  ({display})")
             _add_site(repo_root, provider=provider, name=name, username=username,
                       host=None, path_suffix=None)
             added += 1
+            bar.update(1)
+        bar.close()
         import_path.unlink()
         print(f"import done: {added} added, {skipped} skipped -- {import_path.name} deleted")
         _sync_gdw_files(sites_path, config_path, gdw_cfg)

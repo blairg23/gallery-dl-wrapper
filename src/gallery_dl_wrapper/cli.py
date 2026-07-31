@@ -410,11 +410,18 @@ def _sync_gdw_files(sites_path: Path, config_path: Path, gdw_cfg: dict[str, obje
         try:
             dest_dir.mkdir(parents=True, exist_ok=True)
             synced = []
-            for src in (sites_path, config_path):
+            for src, dest_name in ((sites_path, "sites.json"), (config_path, "config.json")):
                 if src.exists():
-                    shutil.copy2(src, dest_dir / src.name)
-                    synced.append(src.name)
+                    shutil.copy2(src, dest_dir / dest_name)
+                    synced.append(dest_name)
             print(f"synced {', '.join(synced)} -> {dest_dir}", file=sys.stdout)
+        except PermissionError as exc:
+            print(
+                f"sync failed for {dest_dir}: {exc}\n"
+                f"  A file at the target may be owned by a different user (common on WSL drives "
+                f"mounted without an explicit uid/gid mapping). Try: sudo chmod 664 {dest_dir}/*.json",
+                file=sys.stderr,
+            )
         except Exception as exc:
             print(f"sync failed for {dest_dir}: {exc}", file=sys.stderr)
 

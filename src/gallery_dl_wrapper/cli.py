@@ -342,8 +342,14 @@ def _slugify(text: str) -> str:
     return re.sub(r"_+", "_", text).strip("_")
 
 
-def _resolve_display_name(provider: str, username: str, config_path: Path) -> str | None:
+def _resolve_display_name(
+    provider: str,
+    username: str,
+    config_path: Path,
+    write: Callable[[str], None] | None = None,
+) -> str | None:
     """Run gallery-dl --print to fetch the display name without downloading any files."""
+    _write = write or (lambda msg: print(msg, flush=True))
     fmt = _PROVIDER_NAME_FIELD.get(provider)
     url_tpl = _PROVIDER_CANONICAL_URL.get(provider)
     if not fmt or not url_tpl:
@@ -366,7 +372,7 @@ def _resolve_display_name(provider: str, username: str, config_path: Path) -> st
             cwd=str(config_path.parent),
         )
         if result.returncode != 0 and result.stderr.strip():
-            print(f"  [warn] gallery-dl: {result.stderr.strip().splitlines()[-1]}", flush=True)
+            _write(f"  [warn] gallery-dl: {result.stderr.strip().splitlines()[-1]}")
         name = result.stdout.strip().splitlines()[0].strip() if result.stdout.strip() else ""
         if name and name not in ("None", fmt):
             return name
@@ -530,7 +536,9 @@ def _add_site(
     username: str,
     host: str | None,
     path_suffix: str | None,
+    write: Callable[[str], None] | None = None,
 ) -> None:
+    _write = write or (lambda msg: print(msg, file=sys.stdout))
     sites_path = repo_root / "sites.json"
     if sites_path.exists():
         sites_doc = _load_sites_file(sites_path)
@@ -582,12 +590,12 @@ def _add_site(
         if not isinstance(site, dict):
             continue
         if site.get("name") == clean_name and site.get("username") == clean_username:
-            print(f"[{provider_key}] {clean_name} already exists", file=sys.stdout)
+            _write(f"[{provider_key}] {clean_name} already exists")
             return
 
     sites_list.append({"name": clean_name, "username": clean_username})
     _write_sites_json(sites_path, sites_doc)
-    print(f"[{provider_key}] added {clean_name} (@{clean_username})", file=sys.stdout)
+    _write(f"[{provider_key}] added {clean_name} (@{clean_username})")
 
 
 def _remove_site(
@@ -891,15 +899,18 @@ def main(argv: list[str] | None = None) -> None:
         lines = import_path.read_text(encoding="utf-8").splitlines()
         added = 0
         skipped = 0
+        bar = tqdm(total=len(lines), desc="importing", unit="line", dynamic_ncols=True)
         for line in lines:
             parsed = _parse_import_line(line)
             if parsed is None:
                 if line.strip() and not line.strip().startswith("#"):
-                    print(f"skipped (unrecognised domain): {line.strip()}", file=sys.stderr)
+                    bar.write(f"skipped (unrecognised domain): {line.strip()}", file=sys.stderr)
                     skipped += 1
+                bar.update(1)
                 continue
             provider, username = parsed
-            display = _resolve_display_name(provider, username, config_path)
+            bar.set_postfix_str(f"connecting to {provider} (@{username})", refresh=True)
+            display = _resolve_display_name(provider, username, config_path, write=bar.write)
             slug = _slugify(display) if display else ""
             name = slug if slug else username
             # De-duplicate: if another username already owns this slug, append ours.
@@ -909,10 +920,12 @@ def main(argv: list[str] | None = None) -> None:
                 if existing:
                     name = f"{slug}_{username}"
             if display:
-                print(f"  {username} -> {name}  ({display})")
+                bar.write(f"  {username} -> {name}  ({display})")
             _add_site(repo_root, provider=provider, name=name, username=username,
-                      host=None, path_suffix=None)
+                      host=None, path_suffix=None, write=bar.write)
             added += 1
+            bar.update(1)
+        bar.close()
         import_path.unlink()
         print(f"import done: {added} added, {skipped} skipped -- {import_path.name} deleted")
         _sync_gdw_files(sites_path, config_path, gdw_cfg)

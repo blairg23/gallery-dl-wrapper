@@ -899,6 +899,16 @@ def main(argv: list[str] | None = None) -> None:
         lines = import_path.read_text(encoding="utf-8").splitlines()
         added = 0
         skipped = 0
+        existing_count = 0
+        sites_path_obj = repo_root / "sites.json"
+        sites_doc = _load_sites_file(sites_path_obj) if sites_path_obj.exists() else {}
+        known: dict[tuple[str, str], str] = {}
+        for prov, block in sites_doc.items():
+            if not isinstance(block, dict):
+                continue
+            for site in block.get("sites", []):
+                if isinstance(site, dict) and site.get("username"):
+                    known[(prov, _normalize_username(site["username"]))] = site.get("name", "")
         bar = tqdm(total=len(lines), desc="importing", unit="line", dynamic_ncols=True)
         for line in lines:
             parsed = _parse_import_line(line)
@@ -909,25 +919,35 @@ def main(argv: list[str] | None = None) -> None:
                 bar.update(1)
                 continue
             provider, username = parsed
+            norm_username = _normalize_username(username)
+            known_name = known.get((provider, norm_username))
+            if known_name is not None:
+                bar.write(f"[{provider}] {known_name} already exists")
+                existing_count += 1
+                bar.update(1)
+                continue
             bar.set_postfix_str(f"connecting to {provider} (@{username})", refresh=True)
             display = _resolve_display_name(provider, username, config_path, write=bar.write)
             slug = _slugify(display) if display else ""
             name = slug if slug else username
             # De-duplicate: if another username already owns this slug, append ours.
             if slug and slug != username:
-                sites_doc = _load_sites_file(repo_root / "sites.json") if (repo_root / "sites.json").exists() else {}
-                existing = [s for s in sites_doc.get(provider, {}).get("sites", []) if s.get("name") == slug and s.get("username") != username]
-                if existing:
+                conflict = [
+                    u for (p, u), n in known.items()
+                    if p == provider and n == slug and u != norm_username
+                ]
+                if conflict:
                     name = f"{slug}_{username}"
             if display:
                 bar.write(f"  {username} -> {name}  ({display})")
             _add_site(repo_root, provider=provider, name=name, username=username,
                       host=None, path_suffix=None, write=bar.write)
+            known[(provider, norm_username)] = name
             added += 1
             bar.update(1)
         bar.close()
         import_path.unlink()
-        print(f"import done: {added} added, {skipped} skipped -- {import_path.name} deleted")
+        print(f"import done: {added} added, {existing_count} already tracked, {skipped} skipped -- {import_path.name} deleted")
         _sync_gdw_files(sites_path, config_path, gdw_cfg)
         raise SystemExit(0)
 

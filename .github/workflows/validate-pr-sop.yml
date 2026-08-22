@@ -1,0 +1,178 @@
+name: Validate PR review thread SOP
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
+  # Replying to a review thread is a new review comment, so this re-triggers
+  # the check after the "reply" SOP step. Resolving a thread and reacting
+  # +1 have no corresponding Actions trigger event (GitHub does not expose
+  # pull_request_review_thread's resolved/unresolved action, or comment
+  # reactions, to workflow `on:` triggers) -- `repo-scaffold pr rerun
+  # --failed-only` after finishing those steps remains the way to refresh
+  # the check without a new commit or review submission.
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to check
+        required: true
+        type: number
+
+jobs:
+  check-sop:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+
+    steps:
+      - name: Check review threads for SOP compliance
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const prNumber =
+              context.payload.pull_request?.number ||
+              parseInt(context.payload.inputs?.pr_number || "0");
+
+            if (!prNumber) {
+              core.setFailed("Could not determine PR number from event payload.");
+              return;
+            }
+
+            // The SOP's prescribed reply form is "Fixed in <hash>. <sentence>."
+            // (see AGENTS.md Review thread SOP step 2) -- anchor to that phrase
+            // instead of matching a bare hex-looking token anywhere in the
+            // comment, which false-positives on ordinary words built entirely
+            // from hex letters (e.g. "defaced"). See #263 (original bug) and
+            // the follow-up review on #307 (this anchoring fix).
+            const REPLY_RE = /\bfixed in\s+[0-9a-f]{7,40}\b/i;
+
+            // A thread's own comments connection can in principle exceed one
+            // page too, same as the outer reviewThreads connection -- fetch
+            // whatever's left with a follow-up query scoped to that thread.
+            async function fetchRemainingComments(threadId, after) {
+              const comments = [];
+              while (true) {
+                const data = await github.graphql(`
+                  query($threadId: ID!, $after: String) {
+                    node(id: $threadId) {
+                      ... on PullRequestReviewThread {
+                        comments(first: 50, after: $after) {
+                          pageInfo { hasNextPage endCursor }
+                          nodes {
+                            databaseId
+                            body
+                            reactionGroups {
+                              content
+                              reactors { totalCount }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `, { threadId, after });
+                const page = data.node.comments;
+                comments.push(...page.nodes);
+                if (!page.pageInfo.hasNextPage) break;
+                after = page.pageInfo.endCursor;
+              }
+              return comments;
+            }
+
+            const threads = [];
+            let after = null;
+            while (true) {
+              const data = await github.graphql(`
+                query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      reviewThreads(first: 50, after: $after) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes {
+                          id
+                          isResolved
+                          comments(first: 50) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              databaseId
+                              body
+                              reactionGroups {
+                                content
+                                reactors { totalCount }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                number: prNumber,
+                after,
+              });
+
+              const page = data.repository.pullRequest.reviewThreads;
+              threads.push(...page.nodes);
+              if (!page.pageInfo.hasNextPage) break;
+              after = page.pageInfo.endCursor;
+            }
+
+            if (threads.length === 0) {
+              core.info("No review threads found. SOP check passed.");
+              return;
+            }
+
+            const failing = [];
+            for (const thread of threads) {
+              let comments = thread.comments.nodes;
+              if (thread.comments.pageInfo.hasNextPage) {
+                comments = comments.concat(
+                  await fetchRemainingComments(thread.id, thread.comments.pageInfo.endCursor)
+                );
+              }
+
+              const hasReply = comments.slice(1).some(c => REPLY_RE.test(c.body || ""));
+              const isResolved = thread.isResolved;
+              const firstComment = comments[0] || {};
+              // reactionGroups gives an aggregate count per reaction type in
+              // one shot -- no pagination needed, unlike the raw `reactions`
+              // connection this replaced (see #303).
+              const reactionGroups = firstComment.reactionGroups || [];
+              const hasPlusOne = reactionGroups.some(
+                g => g.content === "THUMBS_UP" && g.reactors.totalCount > 0
+              );
+
+              if (!hasReply || !isResolved || !hasPlusOne) {
+                const missing = [];
+                if (!hasReply) missing.push("reply");
+                if (!isResolved) missing.push("resolved");
+                if (!hasPlusOne) missing.push("reaction(+1)");
+                failing.push({
+                  threadId: thread.id,
+                  commentId: firstComment.databaseId,
+                  missing,
+                });
+              }
+            }
+
+            const total = threads.length;
+            const passed = total - failing.length;
+            core.info(`${passed}/${total} threads SOP-compliant.`);
+
+            if (failing.length > 0) {
+              for (const f of failing) {
+                core.error(
+                  `Thread ${f.threadId} (comment #${f.commentId}) missing: ${f.missing.join(", ")}`
+                );
+              }
+              core.setFailed(
+                `${failing.length} review thread(s) not SOP-compliant. ` +
+                "SOP: push fix -> reply with commit hash -> resolve thread -> react +1."
+              );
+            }

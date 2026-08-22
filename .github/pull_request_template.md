@@ -1,5 +1,5 @@
 ## 🧾 Title
-<!-- Example: IF-11 Configure Snowflake Multi-Factor Authentication and Obtain Personal Access Token (PAT) -->
+<!-- Example: Improve backlog bootstrap issue creation flow -->
 
 ## 🧠 Description
 <!-- Briefly explain what this PR accomplishes and why it’s needed. -->
@@ -19,9 +19,10 @@ This pull request [summarize purpose here].
 This PR aims to [describe the goal or intended outcome].
 
 ## 🔗 Related Issues / Epics
-<!-- Link Jira tickets or Epics for traceability. Use bracketed Jira keys and add reference links at the bottom. -->
-- **Epic:** [GDW-XX] *Epic Name Here*
-- **Issue:** [GDW-YY] *Issue Title Here*
+<!-- Link GitHub issues/epics for traceability. -->
+- **Epic:** #<epic-issue-number>
+- **Issue:** #<issue-number>
+- Closes #<issue-number>
 
 ## 🧪 Testing
 <!-- Describe how reviewers can verify this PR works as intended. -->
@@ -32,9 +33,4 @@ This PR aims to [describe the goal or intended outcome].
 ## 🧰 Developer Notes
 <!-- Optional: Add any additional notes, caveats, or follow-ups here. -->
 - [ ] Verify environment variables are configured properly
-- [ ] Confirm MFA or authentication process works as expected
 - [ ] Ensure code runs under both local and CI/CD environments
-
-<!-- Issue reference links - replace IF-XX/IF-YY with the actual Jira keys for this PR -->
-[GDW-XX]: https://gallery-dl-wrapper.atlassian.net/browse/GDW-XX
-[GDW-YY]: https://gallery-dl-wrapper.atlassian.net/browse/GDW-YY

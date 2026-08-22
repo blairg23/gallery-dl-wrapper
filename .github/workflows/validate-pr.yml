@@ -1,0 +1,111 @@
+name: Validate PR body format
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Check PR body and flag if malformed
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const number = context.payload.pull_request.number;
+            const author = context.payload.pull_request.user?.login || "";
+            const MISSING_SECTIONS_MARKER = "This PR is missing required body sections:";
+
+            const removeStaleLabel = async () => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  name: "needs-format",
+                });
+                core.info(`Removed needs-format label from PR #${number}.`);
+              } catch (_) {}
+            };
+
+            if (author === "dependabot[bot]") {
+              core.info(`PR #${number} is from Dependabot; skipping body-format check.`);
+              // Clear any needs-format label left over from before this skip existed.
+              await removeStaleLabel();
+              return;
+            }
+
+            const body = context.payload.pull_request.body || "";
+            const required = ["## 🧾 Title"];
+            const missing = required.filter(h => !body.includes(h));
+
+            if (missing.length === 0) {
+              core.info(`PR #${number} body looks good.`);
+              await removeStaleLabel();
+              return;
+            }
+
+            // Create needs-format label if it does not exist yet (422 = already
+            // exists). Any other failure (e.g. a permissions regression) is
+            // surfaced instead of swallowed, so it shows up in the Actions log
+            // rather than silently preventing the label -- and therefore the
+            // explanatory comment below -- from ever landing (see #302).
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: "needs-format",
+                color: "e11d48",
+                description: "Issue body does not match the required template format",
+              });
+            } catch (err) {
+              if (err.status !== 422) {
+                core.warning(`Failed to create needs-format label: ${err.message}`);
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              labels: ["needs-format"],
+            });
+
+            // Avoid posting a duplicate notice on every push while the PR stays
+            // malformed -- only comment once, when the notice isn't already
+            // there (see #301).
+            const existingComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+            });
+            const alreadyNotified = existingComments.some(
+              c => c.user?.type === "Bot" && (c.body || "").includes(MISSING_SECTIONS_MARKER)
+            );
+            if (alreadyNotified) {
+              core.info(`PR #${number} already has the missing-sections notice; skipping duplicate comment.`);
+              return;
+            }
+
+            // Relative markdown links in a comment resolve against the comment's
+            // own URL (.../pull/<n>), not the repo root, so a plain relative path
+            // 404s instead of opening the template. Build an absolute blob URL
+            // against the actual default branch instead (see #299).
+            const ref = context.payload.repository.default_branch;
+            const templateUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${ref}/.github/pull_request_template.md`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body: [
+                MISSING_SECTIONS_MARKER,
+                ...missing.map(h => `- \`${h}\``),
+                "",
+                `Please update the PR description to match the [pull request template](${templateUrl}).`,
+              ].join("\n"),
+            });

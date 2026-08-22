@@ -1,0 +1,74 @@
+name: Validate issue body format
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Check body and flag if malformed
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            const number = context.payload.issue.number;
+
+            const required = ["## 🧾 Title", "## 🧠 Summary"];
+            const missing = required.filter(h => !body.includes(h));
+
+            if (missing.length === 0) {
+              core.info(`Issue #${number} body looks good.`);
+              // Remove needs-format if it was added by a previous failed check
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: number,
+                  name: "needs-format",
+                });
+                core.info(`Removed needs-format label from issue #${number}.`);
+              } catch (_) {}
+              return;
+            }
+
+            // Create needs-format label if it does not exist yet (422 = already exists)
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: "needs-format",
+                color: "e11d48",
+                description: "Issue body does not match the required template format",
+              });
+            } catch (_) {}
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              labels: ["needs-format"],
+            });
+
+            // Relative markdown links in a comment resolve against the comment's
+            // own URL (.../issues/<n>), not the repo root, so a plain relative
+            // path 404s instead of opening the template. Build an absolute blob
+            // URL against the actual default branch instead (see #299).
+            const ref = context.payload.repository.default_branch;
+            const repoBlobUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${ref}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body: [
+                "This issue is missing required template sections:",
+                ...missing.map(h => `- \`${h}\``),
+                "",
+                `Please update the body to match the [epic template](${repoBlobUrl}/.github/ISSUE_TEMPLATE/epic.md) or [ticket template](${repoBlobUrl}/.github/ISSUE_TEMPLATE/ticket.md).`,
+              ].join("\n"),
+            });

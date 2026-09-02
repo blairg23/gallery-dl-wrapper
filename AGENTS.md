@@ -27,6 +27,11 @@ poetry install --with dev
 poetry run pytest       # tests
 ```
 
+No `tests/` directory exists yet, so `pytest` currently collects zero tests
+and exits with status 5 -- that's expected until the first test module
+lands, not a broken environment. There is no CI job running `pytest` for
+this repo yet either.
+
 ---
 
 ## GitHub operations go through repo-scaffold

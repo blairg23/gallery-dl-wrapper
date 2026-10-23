@@ -907,8 +907,9 @@ def main(argv: list[str] | None = None) -> None:
             if not isinstance(block, dict):
                 continue
             for site in block.get("sites", []):
-                if isinstance(site, dict) and site.get("username"):
-                    known[(prov, _normalize_username(site["username"]))] = site.get("name", "")
+                username = site.get("username") if isinstance(site, dict) else None
+                if isinstance(username, str) and username.strip():
+                    known[(prov, _normalize_username(username))] = site.get("name", "")
         bar = tqdm(total=len(lines), desc="importing", unit="line", dynamic_ncols=True)
         for line in lines:
             parsed = _parse_import_line(line)
